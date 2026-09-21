@@ -1,0 +1,160 @@
+library( "DESeq2" )
+library(ggplot2)
+1.countData <- read.csv('Sham_D0D1_counts_DEseq.csv', header = TRUE, sep = ",")
+2.metaData <- read.csv('D0D1_Meta_DEseq.csv', header = TRUE, sep = ",")
+3.dds <- DESeqDataSetFromMatrix(countData=countData,colData=metaData,design=~Day, tidy = TRUE)
+4.dds$Day<-factor(dds$Day, levels=c("Control","Day 1"))
+5.dds<-DESeq(dds)
+6.dds
+7.res <- results(dds)
+8. head(results(dds, tidy=TRUE))
+9. summary(res)
+10. res <- res[order(res$padj),]
+11.write.csv(res,"DEgenes_results.csv")
+12.par(mfrow=c(2,4))
+13.plotCounts(dds, gene="MAPK11", intgroup="Day",col = c("blue", "red")) 
+#########################################################################################################
+# Script for Volcano plot
+14.  mtext("My 'Vax D0D7 Top Upregulated", side = 3, line = -1, outer = TRUE)# do the same for the top genes
+14.with(countData, plot(log2FoldChange, -log10(pvalue), pch=20, main="Volcano plot", xlim=c(-3,3))) # with limits according to your data and adjust p value and fc
+with(subset(countData, log2FoldChange<=-2 ), points(log2FoldChange, -log10(pvalue), pch=20, col="blue"))
+with(subset(countData, log2FoldChange>=2 ), points(log2FoldChange, -log10(pvalue), pch=20, col="red"))
+with(subset(countData, -log10(pvalue)<=0.05 ), points(log2FoldChange, -log10(pvalue), pch=20, col="green"))
+legend("topleft",c("log2FoldChange<=2","log2FoldChange<=-2","pvalue<=0.05"),cex=.8,col=c("red","blue","green"),pch=c(19,19),text.font=4,  bg='lightblue')
+#######################################################################################################################
+
+
+15.vsdata <- varianceStabilizingTransformation(dds, blind=FALSE)
+16. plotPCA(vsdata, intgroup="Day") # plot pca
+17.vsd <- varianceStabilizingTransformation(dds, blind=FALSE)
+18 vsd
+19.rld <- rlog(dds, blind=FALSE)
+20.rld
+21.head(assay(vsd), 3)
+22.ntd <- normTransform(dds)
+23.library("vsn")
+24.meanSdPlot(assay(ntd))
+25.meanSdPlot(assay(vsd))
+26.library("pheatmap")
+27.select <- order(rowMeans(counts(dds,normalized=TRUE)),
+                 decreasing=TRUE)[1:20] # change the number of columns you want
+28.df <- as.data.frame(colData(dds)[,c("condition","type")])
+29.df <- as.data.frame(colData(dds)[,c("Day","NHP")])
+31pheatmap(assay(ntd)[select,], cluster_rows=FALSE, show_rownames=TRUE,
+         cluster_cols=FALSE, annotation_col=df,fontsize = 8,cex=1,cellwidth = 25,cellheight= 5,main = "V0V7 Pheatmap")
+32. sampleDists <- dist(t(assay(vsd)))
+33. library("RColorBrewer")
+34. sampleDistMatrix <- as.matrix(sampleDists)
+35.rownames(sampleDistMatrix) <- paste(vsd$control, vsd$Day, sep="-")
+36.colnames(sampleDistMatrix) <- NULL
+> colors <- colorRampPalette( rev(brewer.pal(9, "Reds")) )(255)
+> pheatmap(sampleDistMatrix,
+                clustering_distance_rows=sampleDists,
+                    clustering_distance_cols=sampleDists,
+                   col=colors)
+
+37. Enhanced volcano plot
+rownames <-countData$Genes
+EnhancedVolcano(countData,
++                 lab = rownames,
++                 x = 'log2FoldChange',
++                 y = 'pvalue',
++                 title = 'Vax Volcano',
++                 pCutoff = 0.05,
++                 FCcutoff = 2,
++                 pointSize = 1.0,
++                 labSize = 3.0)
+> PathView Code
+RA <- read.csv('Vax pathfinder.csv', header = TRUE, sep = ",")
+> RA <- read.csv('Vax pathfinder.csv', header = TRUE, sep = ",")
+View(RA)
+knitr::kable(head(RA))
+output_df <- run_pathfindR(RA)
+
+
+
+# Heatmap For Comparison
+rownames(countData) <- countData$Genes
+geneExp_matrix <- as.matrix(countData[2:3])
+dev
+pheatmap(geneExp_matrix,fontsize = 4,cellwidth =24,cellheight= 4,main = "pheatmap default")
+png('heatmap.png',width=6,height=6,units='in',res=300) # new [heatmap with imporved resolution)
+pheatmap(geneExp_matrix)
+pheatmap(geneExp_matrix,scale="row",cex=0.8,cluster_cols = F) #better resolution pheatmap
+
+# parsing data from file 1 and file 2 to find matching genes
+# read the RNAseq result summary file
+result <- read_excel("RNAseq_Result.xlsx")
+
+# read the gene lists file
+geneset <- read_excel("Gene set list.xlsx")
+
+# read one specific list from the gene lists file
+ListA <- geneset$ListA
+
+#subsetting
+ResultListA <- result[(result$Gene_name) %in% ListA, ]
+
+#output file
+write.csv(ResultListA, 'ResultListA.csv')
+
+#Code for Density plot
+ p<-ggplot(countData, aes(x=Downregulated, fill=Study)) +
++     geom_density(alpha=0.4)
+df <- data.frame(countData)
+ggplot(df, aes(x =DownRegulated, fill = Study)) +geom_density() + guides(fill = guide_legend(title = "Study"))+scale_fill_manual(values=c("Sham"="red","Vax"="blue"))
+
+
+# Scatter plot
+plot(x = countData$Sham_D0D1,y = countData$Vax_D0D1,
+     xlab = "Sham",
+      ylab = "Vax",
+      xlim = c(-3,2),
+     ylim = c(-3,2),		 
+      main = "Sham Vs Vax D0D1",col= c("red","blue"),lines(lowess(x, y), col = "blue"))
+legend("topleft",c("Sham","Vax"),cex=.8,col=c("red","blue"),pch=c(19,19),text.font=4,  bg='lightblue')# for legend
+#scatter plot 2
+plot(countData$Sham_D0D28,countData$Vax_D0D28,col = topo.colors(2),cex=1,pch=19,xlab = "Sham",
+            ylab = "Vax",
+            xlim = c(-4,4),
+           ylim = c(-4,4), main = "Sham Vs Vax D0D28")
+
+
+# New Density plot
+x=countdata$Sham
+y=countdata$Vax
+plot(x,y,lines(lowess(x, y), col = "blue",),col=c("red","blue"),cex=1.5,pch = 19)
+
+
+#correlation plot
+library(corrplot)
+rownames(countData) <- countData$Genes
+> geneExp_matrix <- as.matrix(countData[2:25])
+ M <-cor(geneExp_matrix)
+corrplot(M)
+
+
+#Scatter plot with abline and legend
+x= count$x
+y=count$y
+plot(x, y, pch = 19,col=c("red","blue"),xlab = "Sham",ylab = "Vax",xlim = c(-5,5),cex=1.4)
+abline(reg_model, col="steelblue")
+legend("topleft",c("Sham","Vax"),cex=.8,col=c("red","blue"),pch=c(19,19),text.font=4,  bg='lightblue')
+
+# scatter plot for each group
+> plot(test$AE, 
+        pch = 16, 
+      col = factor(test$Days))
+# boxplots
+> parameter <- boxplot(test$AE ~ test$Day,
+                     xlab="Day", 
+                      ylab="AE",
+                      main="Study 2 Lung AE",col = c("blue","red","green"))
+> parameter <- boxplot(test$IM ~ test$Day,
+                      xlab="Day",
+                   ylab="IM",
+                      main="Study 2 Lung IM",col = c("blue","red","green"))
+
+
+
+
