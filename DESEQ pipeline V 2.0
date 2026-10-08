@@ -1,0 +1,201 @@
+if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+BiocManager::install(c("DESeq2", "ComplexHeatmap")) # ComplexHeatmap or pheatmap
+install.packages(c("shiny", "tidyverse", "ggplot2", "ggrepel"))
+library(shiny)
+library(tidyverse)
+library(DESeq2)
+library(ggrepel)
+
+# --- UI Layout ---
+ui <- fluidPage(
+  titlePanel("NanoString & Transcriptomics DESeq2 Analyzer"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Step 1: Get Mock Data (Optional)"),
+      helpText("Download mock NanoString datasets if you don't have files ready."),
+      downloadButton("download_mock_meta", "Download Mock Metadata (CSV)"),
+      br(), br(),
+      downloadButton("download_mock_counts", "Download Mock Counts (CSV)"),
+      hr(),
+      
+      h4("Step 2: Upload Files"),
+      fileInput("meta_file", "Choose Sample Sheet / Metadata (CSV)", accept = ".csv"),
+      fileInput("counts_file", "Choose Raw Counts Matrix (CSV)", accept = ".csv"),
+      hr(),
+      
+      h4("Step 3: Experimental Setup"),
+      uiOutput("design_ui"),
+      actionButton("run_analysis", "Run DESeq2 Analysis", class = "btn-primary", style="width: 100%;")
+    ),
+    
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Data Preview", 
+                 h4("Metadata Preview"), tableOutput("meta_preview"),
+                 h4("Counts Preview"), tableOutput("counts_preview")),
+        
+        tabPanel("DESeq2 Results Table", 
+                 br(),
+                 downloadButton("download_results", "Export Full Results (CSV)"),
+                 br(), br(),
+                 dataTableOutput("results_table")),
+        
+        tabPanel("Volcano Plot", 
+                 plotOutput("volcano_plot", height = "550px")),
+        
+        tabPanel("Expression Heatmap", 
+                 plotOutput("heatmap_plot", height = "600px"))
+      )
+    )
+  )
+)
+
+# --- Server Logic ---
+server <- function(input, output, session) {
+  
+  # --- 1. Mock File Generation ---
+  # Generates synthetic data simulating a typical NanoString panel (e.g., 200 genes, 6 samples)
+  mock_data <- reactive({
+    set.seed(42)
+    samples <- c("Control_1", "Control_2", "Control_3", "Treatment_1", "Treatment_2", "Treatment_3")
+    metadata <- data.frame(
+      SampleID = samples,
+      Condition = rep(c("Control", "Treatment"), each = 3),
+      Batch = rep(c("Batch1", "Batch2", "Batch1"), 2)
+    )
+    
+    genes <- c(paste0("Immune_Gene_", 1:190), paste0("Housekeeping_", 1:10))
+    counts <- matrix(rnbinom(200 * 6, mu = 500, size = 2), nrow = 200, ncol = 6)
+    
+    # Introduce explicit synthetic differential expression to Treatment samples
+    counts[1:30, 4:6] <- counts[1:30, 4:6] * sample(4:10, 30, replace=TRUE) # Upregulated
+    counts[31:60, 4:6] <- counts[31:60, 4:6] / sample(3:6, 30, replace=TRUE)  # Downregulated
+    counts <- round(counts)
+    
+    counts_df <- as.data.frame(counts)
+    colnames(counts_df) <- samples
+    counts_df <- cbind(GeneID = genes, counts_df)
+    
+    list(metadata = metadata, counts = counts_df)
+  })
+  
+  output$download_mock_meta <- downloadHandler(
+    filename = function() { "mock_nanostring_metadata.csv" },
+    content = function(file) { write.csv(mock_data()$metadata, file, row.names = FALSE) }
+  )
+  
+  output$download_mock_counts <- downloadHandler(
+    filename = function() { "mock_nanostring_counts.csv" },
+    content = function(file) { write.csv(mock_data()$counts, file, row.names = FALSE) }
+  )
+  
+  # --- 2. File Loading & Processing ---
+  meta_df <- reactive({
+    req(input$meta_file)
+    read.csv(input$meta_file$datapath, stringsAsFactors = FALSE)
+  })
+  
+  counts_df <- reactive({
+    req(input$counts_file)
+    read.csv(input$counts_file$datapath, row.names = 1, stringsAsFactors = FALSE)
+  })
+  
+  # Dynamic UI generation to pick variable of interest
+  output$design_ui <- renderUI({
+    req(meta_df())
+    selectInput("design_var", "Select Condition Column:", choices = colnames(meta_df())[-1])
+  })
+  
+  # Previews
+  output$meta_preview <- renderTable({ req(meta_df()); head(meta_df()) })
+  output$counts_preview <- renderTable({ req(counts_df()); head(counts_df()[, 1:min(5, ncol(counts_df()))]) }, rownames = TRUE)
+  
+  # --- 3. DESeq2 Execution ---
+  deseq_results <- eventReactive(input$run_analysis, {
+    req(meta_df(), counts_df(), input$design_var)
+    
+    meta <- meta_df()
+    counts <- as.matrix(counts_df())
+    
+    # Align rows of metadata with columns of counts
+    rownames(meta) <- meta[,1]
+    common_samples <- intersect(rownames(meta), colnames(counts))
+    
+    meta <- meta[common_samples, , drop = FALSE]
+    counts <- counts[, common_samples]
+    
+    # Set design factor
+    meta[[input$design_var]] <- as.factor(meta[[input$design_var]])
+    
+    # Construct DESeq2 Object
+    design_formula <- as.formula(paste0("~ ", input$design_var))
+    dds <- DESeqDataSetFromMatrix(countData = counts, colData = meta, design = design_formula)
+    
+    # Run Pipeline
+    dds <- DESeq(dds)
+    res <- results(dds)
+    
+    list(res = as.data.frame(res), dds = dds)
+  })
+  
+  # Render Results Table
+  output$results_table <- renderDataTable({
+    req(deseq_results())
+    deseq_results()$res
+  }, options = list(pageLength = 10))
+  
+  output$download_results <- downloadHandler(
+    filename = function() { "DESeq2_differential_expression_results.csv" },
+    content = function(file) { write.csv(deseq_results()$res, file, row.names = TRUE) }
+  )
+  
+  # --- 4. Visualizations ---
+  
+  # Volcano Plot
+  output$volcano_plot <- renderPlot({
+    req(deseq_results())
+    df <- deseq_results()$res
+    df$Gene <- rownames(df)
+    df <- na.omit(df)
+    
+    # Define thresholds
+    df$Significance <- "Not Significant"
+    df$Significance[df$log2FoldChange >= 1 & df$padj < 0.05] <- "Upregulated"
+    df$Significance[df$log2FoldChange <= -1 & df$padj < 0.05] <- "Downregulated"
+    
+    ggplot(df, aes(x = log2FoldChange, y = -log30(padj))) + # used -log10 transformation downstream safely
+      geom_point(aes(color = Significance), alpha = 0.8, size = 2) +
+      scale_color_manual(values = c("Upregulated" = "firebrick", "Downregulated" = "dodgerblue", "Not Significant" = "grey")) +
+      theme_minimal(base_size = 14) +
+      labs(title = "Volcano Plot of Differential Expression", x = "log2 Fold Change", y = "-log10 (Adj P-value)") +
+      geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = "black") +
+      geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "black") +
+      geom_text_repel(data = head(df[df$Significance != "Not Significant", ], 10), aes(label = Gene), size = 4)
+  })
+  
+  # Heatmap
+  output$heatmap_plot <- renderPlot({
+    req(deseq_results())
+    dds <- deseq_results()$dds
+    res <- deseq_results()$res
+    
+    # Extract top 30 variable/significant genes
+    top_genes <- rownames(head(res[order(res$padj, na.last = TRUE), ], 30))
+    
+    # Standardize/Normalize data matrix via VST (Variance Stabilizing Transformation)
+    vsd <- rlog(dds, blind = FALSE)
+    mat <- assay(vsd)[top_genes, ]
+    
+    # Z-score row scaling
+    mat_scaled <- t(scale(t(mat)))
+    
+    # Plot using built in stats heatmap function safely
+    heatmap(mat_scaled, 
+            col = colorRampPalette(c("dodgerblue", "white", "firebrick"))(50),
+            main = "Top 30 Differentially Expressed Genes",
+            Rowv = TRUE, Colv = TRUE, scale = "none")
+  })
+}
+
+shinyApp(ui = ui, server = server)
